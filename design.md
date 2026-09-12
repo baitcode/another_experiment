@@ -487,9 +487,9 @@ create table telegram_posts (
     discussion_chat_id      bigint,
     discussion_message_id   bigint,          
 
-    -- syncing metadata, might live in a separate table.
-    last_synced_message_id  bigint,          -- high-water mark for incremental fetch
+    -- syncing metadata
     last_synced_at          timestamptz,     -- last successful sync; returned as comments_synced_at
+    last_synced_message_id  bigint,          -- high-water mark for incremental fetch
     sync_error              text,            -- last sync error
 
     -- bookkeeping
