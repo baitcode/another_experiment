@@ -1,4 +1,5 @@
 import { assert, assertEquals } from "@std/assert";
+import { sql } from "drizzle-orm";
 import type { Deps } from "../../deps.ts";
 import { withDb } from "../../db/tests/helpers.ts";
 import { UserNotFound } from "../../telegram/client/errors.ts";
@@ -113,5 +114,52 @@ Deno.test("heartbeat keeps a long call from being picked twice", async () => {
     await new Promise((r) => setTimeout(r, 300));
     assertEquals((await pickJobs(db, { batchSize: 1, leaseMs: 200 })).length, 0, "still leased");
     assertEquals(await running, { status: "success" });
+  });
+});
+
+Deno.test("a runner that calls lease.commit twice is rejected without touching the run again", async () => {
+  await withDb(async (db) => {
+    await ensureActiveJob(db, { postId, platform: "telegram" });
+    const [job] = await pickJobs(db, { batchSize: 1, leaseMs: 60_000 });
+    assert(job !== undefined);
+    const runner: PlatformSyncRunner = {
+      platform: "telegram",
+      run: async (_job, lease) => {
+        const first = await lease.commit(() => Promise.resolve({ status: "success" }));
+        await lease.commit(() => Promise.resolve({ status: "success" }));
+        return first;
+      },
+    };
+    const outcome = await runJob(deps(db), runner, job, 60_000);
+    assertEquals(outcome, {
+      status: "failure",
+      error: "lease.commit called twice",
+      disable: false,
+    });
+    const runs = await listRunsForPost(db, postId);
+    assertEquals(runs.length, 1, "only the first commit opened/closed a run row");
+    assertEquals(runs[0]?.status, "success", "the run row reflects the first, valid commit");
+  });
+});
+
+Deno.test("commit awaits an in-flight heartbeat before fencing, so it can't resurrect the lock after release", async () => {
+  await withDb(async (db) => {
+    await ensureActiveJob(db, { postId, platform: "telegram" });
+    const [job] = await pickJobs(db, { batchSize: 1, leaseMs: 100 });
+    assert(job !== undefined);
+    const runner: PlatformSyncRunner = {
+      platform: "telegram",
+      run: (_job, lease) =>
+        lease.commit(async () => {
+          await new Promise((r) => setTimeout(r, 300));
+          return { status: "success" };
+        }),
+    };
+    const outcome = await runJob(deps(db), runner, job, 100);
+    assertEquals(outcome, { status: "success" });
+    const rows = await db.execute<{ locked_until: string | null }>(
+      sql`select locked_until from post_comments_sync_jobs where id = ${job.id}`,
+    );
+    assertEquals(rows[0]?.locked_until, null, "no straggler heartbeat resurrected the lock");
   });
 });

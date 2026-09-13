@@ -73,6 +73,33 @@ Deno.test("concurrency cap limits in-flight runs", async () => {
   });
 });
 
+Deno.test("tick() is reentrant-safe: overlapping calls don't exceed the concurrency cap", async () => {
+  await withDb(async (db) => {
+    for (const n of [1, 2, 3]) await ensureActiveJob(db, { postId: p(n), platform: "telegram" });
+    let inFlight = 0;
+    let peak = 0;
+    const runner: PlatformSyncRunner = {
+      platform: "telegram",
+      run: async (_job, lease) => {
+        inFlight++;
+        peak = Math.max(peak, inFlight);
+        await new Promise((r) => setTimeout(r, 50));
+        inFlight--;
+        return lease.commit(() => Promise.resolve({ status: "success" }));
+      },
+    };
+    const s = createScheduler(deps(db), [runner], {
+      tickMs: 10_000,
+      batchSize: 10,
+      leaseMs: 60_000,
+      concurrency: 1,
+    });
+    await Promise.all([s.tick(), s.tick()]);
+    await s.stop();
+    assertEquals(peak, 1, "a second, overlapping tick must not double the room it computed");
+  });
+});
+
 Deno.test("a job for a platform without a runner is failed and released", async () => {
   await withDb(async (db) => {
     await ensureActiveJob(db, { postId: p(1), platform: "telegram" });

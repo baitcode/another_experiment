@@ -20,21 +20,42 @@ export async function runJob(
     startedAt: deps.now(),
   });
 
-  const state = { lost: false, committed: false };
+  const state = {
+    lost: false,
+    committed: false,
+    commitStarted: false,
+    heartbeat: null as Promise<void> | null,
+  };
   const beat = setInterval(() => {
-    heartbeatJob(deps.db, job.id, job.leaseToken, leaseMs)
+    const inFlight = heartbeatJob(deps.db, job.id, job.leaseToken, leaseMs)
       .then((ok) => {
         if (!ok) state.lost = true;
       })
       .catch((e: unknown) => {
         console.error(`heartbeat for job ${job.id} failed:`, e);
       });
+    state.heartbeat = inFlight;
+    void inFlight.finally(() => {
+      if (state.heartbeat === inFlight) state.heartbeat = null;
+    });
   }, Math.max(1, Math.floor(leaseMs / 2)));
 
   const lease: Lease = {
     token: job.leaseToken,
-    commit: (fn) =>
-      deps.db.transaction(async (tx) => {
+    commit: async (fn) => {
+      if (state.commitStarted) {
+        throw new Error("lease.commit called twice");
+      }
+      state.commitStarted = true;
+      // Stop the heartbeat and let any already in-flight one finish *before* we take the
+      // fenced row lock: otherwise a heartbeat UPDATE can sit blocked on that lock and fire
+      // right after we commit and release, resurrecting locked_until with the (still valid,
+      // unrotated) lease token.
+      clearInterval(beat);
+      if (state.heartbeat !== null) {
+        await state.heartbeat;
+      }
+      return deps.db.transaction(async (tx) => {
         const held = await fenceJob(tx, job.id, job.leaseToken);
         if (!held) throw new LeaseLost();
         const outcome = await fn(tx);
@@ -48,7 +69,8 @@ export async function runJob(
         });
         state.committed = true;
         return outcome;
-      }),
+      });
+    },
   };
 
   try {
