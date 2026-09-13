@@ -35,6 +35,7 @@ export class FakeTelegram {
   readonly threads = new Map<string, FakeThread>();
   readonly calls: string[] = [];
   private pendingFailure: TelegramError | null = null;
+  private failures: { prefix: string; error: TelegramError }[] = [];
   private nextId = 1000;
   clock: () => Date = () => new Date();
 
@@ -96,19 +97,31 @@ export class FakeTelegram {
     this.pendingFailure = error;
   }
 
+  /** The first call whose log entry starts with `prefix` throws `error` instead of running. */
+  failOn(prefix: string, error: TelegramError): void {
+    this.failures.push({ prefix, error });
+  }
+
   forUser(username: string): Promise<TelegramClient> {
-    this.calls.push(`forUser(${username})`);
-    const failure = this.takeFailure();
+    const call = `forUser(${username})`;
+    this.calls.push(call);
+    const failure = this.takeFailure(call);
     if (failure !== null) return Promise.reject(failure);
     const user = this.accounts.get(username);
     if (user === undefined) return Promise.reject(new UserNotFound(username));
     return Promise.resolve(new FakeClient(this, username, user));
   }
 
-  takeFailure(): TelegramError | null {
-    const f = this.pendingFailure;
-    this.pendingFailure = null;
-    return f;
+  takeFailure(call: string): TelegramError | null {
+    const pending = this.pendingFailure;
+    if (pending !== null) {
+      this.pendingFailure = null;
+      return pending;
+    }
+    const idx = this.failures.findIndex((f) => call.startsWith(f.prefix));
+    if (idx === -1) return null;
+    const [hit] = this.failures.splice(idx, 1);
+    return hit?.error ?? null;
   }
 
   allocateId(): number {
@@ -134,7 +147,7 @@ class FakeClient implements TelegramClient {
 
   private guard(call: string): Promise<void> {
     this.world.calls.push(call);
-    const failure = this.world.takeFailure();
+    const failure = this.world.takeFailure(call);
     return failure === null ? Promise.resolve() : Promise.reject(failure);
   }
 
