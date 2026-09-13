@@ -11,6 +11,7 @@ Whole thing started in the (`process/spec.md`) file, where I've outlined all of 
 Then I've created data model stubs using yaml and with the help of AI I've generated and cleaned up SQL representation (should've used Typescript there, but, well, it is what it is). While discovering the implementation details in a dialogue with AI notes started to pile up. At some point I started to feel that the amount of details covers whole service functionality I've planned for. I've ran several sessions of AI-peered review. Reviewed datamodel, reviewed API and reviewed overall spec for contradictions and gaps several times until reviews stopped producing comments that made sense to me. After that I decided to stop and regenerated the whole spec in a concise way eliminating repetition as much as I could focusing on readability. By the time I've finished the spec, I was already 16 hours in this project and felt an urge to wrap up. So I've create a constitution document outlining the stack and QA properties and desired file structure, then launched superpowers agentic development skill to vibecode the whole thing. I've spent several hours reviewing `sync` module, simplified the API's and dropped lease extension feature. I didn't review the models and their operations, those might contain minor problems, but I decided to skip dealing with those for now, as I don't really have more time to spend on the task.
 
 What I would do next:
+
 - Build a telegram client orchestration feature a special process holding telegram session on user behalf providing with API methods.
 - Test the whole thing manually
 
@@ -71,7 +72,7 @@ curl -s "localhost:8000/telegram/v1/posts/<id>/comments" -H "Authorization: Bear
 
 ## CLI
 
-- `serve` - run the HTTP API; 
+- `serve` - run the HTTP API;
 - `sync` - run the comment sync scheduler alone.
 - `migrate` - apply pending database migrations.
 
