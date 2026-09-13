@@ -2,7 +2,6 @@ import { assert, assertEquals } from "@std/assert";
 import { sql } from "drizzle-orm";
 import type { Deps } from "../../deps.ts";
 import { withDb } from "../../db/tests/helpers.ts";
-import { UserNotFound } from "../../telegram/client/errors.ts";
 import { ensureActiveJob, getJobByPost, pickJobs } from "../models/jobs.ts";
 import { listRunsForPost } from "../models/runs.ts";
 import { runJob } from "../run.ts";
@@ -12,7 +11,11 @@ import type { Db } from "../../db/client.ts";
 const postId = "0199a000-0000-7000-8000-000000000001";
 
 function deps(db: Db): Deps {
-  return { db, telegram: () => Promise.reject(new UserNotFound("x")), now: () => new Date() };
+  return {
+    db,
+    telegram: () => Promise.reject(new Error("no telegram in these tests")),
+    now: () => new Date(),
+  };
 }
 
 Deno.test("a successful run closes the run row and releases the lease", async () => {

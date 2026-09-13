@@ -26,6 +26,12 @@ export function createScheduler(
   const inFlight = new Set<Promise<void>>();
   let timer: ReturnType<typeof setInterval> | null = null;
   let ticking = false;
+  // Bumped by stop(). A tick captures the epoch it started with and, after the `await
+  // pickJobs(...)` below, checks it's still current: a stop() that raced this specific call (i.e.
+  // ran while it was suspended) bumps the epoch and the tick aborts instead of launching runs
+  // against a pool the caller may be closing right after stop() returns. A stop() that already
+  // fully completed before this tick started does not affect it (its epoch is already current).
+  let epoch = 0;
 
   function launch(job: PickedJob): void {
     // A job whose platform has no registered runner still goes through the fenced `runJob`
@@ -58,6 +64,7 @@ export function createScheduler(
     // must not both compute room from the same stale snapshot and together exceed concurrency.
     if (ticking) return;
     ticking = true;
+    const myEpoch = epoch;
     try {
       const room = options.concurrency - inFlight.size;
       if (room <= 0) return;
@@ -65,6 +72,9 @@ export function createScheduler(
         batchSize: Math.min(options.batchSize, room),
         leaseMs: options.leaseMs,
       });
+      // If stop() ran while we were suspended above, the leases we just took will simply expire;
+      // launching runs now would race the pool the caller may close right after stop() returns.
+      if (epoch !== myEpoch) return;
       for (const job of jobs) launch(job);
     } finally {
       ticking = false;
@@ -82,6 +92,7 @@ export function createScheduler(
       }, options.tickMs);
     },
     async stop() {
+      epoch++;
       if (timer !== null) clearInterval(timer);
       timer = null;
       await Promise.all([...inFlight]);

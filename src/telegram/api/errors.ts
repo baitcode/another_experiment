@@ -1,40 +1,10 @@
 import { HttpError } from "../../api/errors.ts";
-import {
-  FloodWait,
-  Forbidden,
-  isTelegramError,
-  MessageNotFound,
-  NoDiscussionGroup,
-  PeerNotFound,
-  SessionInvalid,
-  type TelegramError,
-  Upstream,
-  UserNotFound,
-} from "../client/errors.ts";
-
-/**
- * `isTelegramError` narrows to the abstract `TelegramError` base type, which erases each
- * subclass's own fields (e.g. `FloodWait.retryAfter`). This is the union of its only
- * subclasses, so switching on `.kind` narrows `e` to the right one in each case.
- */
-type AnyTelegramError =
-  | UserNotFound
-  | PeerNotFound
-  | NoDiscussionGroup
-  | MessageNotFound
-  | Forbidden
-  | FloodWait
-  | SessionInvalid
-  | Upstream;
-
-function widen(e: TelegramError): AnyTelegramError {
-  return e as AnyTelegramError;
-}
+import { isTelegramError } from "../client/errors.ts";
 
 /** Submit context of the spec's error table. Non-library errors pass through. */
 export function translateSubmitError(e: unknown, ctx: { username: string }): never {
   if (!isTelegramError(e)) throw e;
-  const err = widen(e);
+  const err = e;
   switch (err.kind) {
     case "user_not_found":
       throw new HttpError(404, "user_not_found", `user ${ctx.username} not found`);
@@ -88,7 +58,7 @@ export function translateReplyError(
   ctx: { username: string; commentId: string },
 ): never {
   if (!isTelegramError(e)) throw e;
-  const err = widen(e);
+  const err = e;
   switch (err.kind) {
     case "user_not_found":
       throw new HttpError(404, "user_not_found", `user ${ctx.username} not found`);

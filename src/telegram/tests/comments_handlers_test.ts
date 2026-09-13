@@ -186,7 +186,8 @@ Deno.test("reply refusals: validation, deleted comment, deleted post, unknown id
     );
     assertEquals(gone.message, `comment ${other.id} was deleted`);
     const listed = await listComments(deps, { postId, page: page10 });
-    assert(listed.items.find((c) => c.id === other.id)?.deleted_at !== null, "row marked deleted");
+    const row = listed.items.find((c) => c.id === other.id);
+    assert(row !== undefined && row.deleted_at !== null, "row marked deleted");
     await expectHttp(
       replyToComment(deps, { postId, commentId: other.id, text: "x" }),
       404,

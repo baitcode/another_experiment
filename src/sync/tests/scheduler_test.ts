@@ -2,7 +2,6 @@ import { assertEquals } from "@std/assert";
 import type { Deps } from "../../deps.ts";
 import type { Db } from "../../db/client.ts";
 import { withDb } from "../../db/tests/helpers.ts";
-import { UserNotFound } from "../../telegram/client/errors.ts";
 import { ensureActiveJob } from "../models/jobs.ts";
 import { listRunsForPost } from "../models/runs.ts";
 import type { PlatformSyncRunner } from "../runner.ts";
@@ -11,7 +10,11 @@ import { createScheduler } from "../scheduler.ts";
 const p = (n: number): string => `0199a000-0000-7000-8000-00000000000${String(n)}`;
 
 function deps(db: Db): Deps {
-  return { db, telegram: () => Promise.reject(new UserNotFound("x")), now: () => new Date() };
+  return {
+    db,
+    telegram: () => Promise.reject(new Error("no telegram in these tests")),
+    now: () => new Date(),
+  };
 }
 
 Deno.test("tick runs every picked job through its platform runner", async () => {
@@ -97,6 +100,31 @@ Deno.test("tick() is reentrant-safe: overlapping calls don't exceed the concurre
     await Promise.all([s.tick(), s.tick()]);
     await s.stop();
     assertEquals(peak, 1, "a second, overlapping tick must not double the room it computed");
+  });
+});
+
+Deno.test("stop() during a mid-flight tick prevents it from launching runs", async () => {
+  await withDb(async (db) => {
+    await ensureActiveJob(db, { postId: p(1), platform: "telegram" });
+    let calls = 0;
+    const runner: PlatformSyncRunner = {
+      platform: "telegram",
+      run: (_job, lease) => {
+        calls++;
+        return lease.commit(() => Promise.resolve({ status: "success" }));
+      },
+    };
+    const s = createScheduler(deps(db), [runner], {
+      tickMs: 10_000,
+      batchSize: 10,
+      leaseMs: 60_000,
+      concurrency: 5,
+    });
+    const tickPromise = s.tick();
+    await s.stop();
+    await tickPromise;
+    assertEquals(calls, 0, "runner was never called");
+    assertEquals(await listRunsForPost(db, p(1)), [], "no run row for the abandoned job");
   });
 });
 

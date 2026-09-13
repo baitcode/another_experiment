@@ -85,13 +85,11 @@ connection, so every caller of one account must share a process.
   That is the known cost of the local two-process split (constitution, "Two processes, locally")
   made sharper by the in-memory fake. It does not affect the deployment shape, which stays
   `serve --with-sync`.
+- `telegram/models/comments.ts` imports the `Message` type from `telegram/client/types.ts`
+  (type-only, same platform folder).
 
-## Known limitation on this machine
+## Verification status
 
-The Docker Desktop engine on the machine this was built on does not answer API calls (image
-pulls and `docker version` hang indefinitely), so the compose stack (`docker compose up`) could
-not be exercised here. The CLI, the image build steps and the end-to-end flow were instead
-smoke-tested by running `deno task migrate` and `deno task serve --with-sync` directly against a
-local PostgreSQL 18 on `localhost:5432`, which exercises the same code the `http`/`sync`
-containers run. Anyone with a working Docker install should confirm `docker compose up` once
-before relying on it.
+Unit and integration tests and a host-run `serve --with-sync` smoke test passed. The compose
+stack (`docker compose up`) has not yet been run because Docker was unavailable on the build
+machine.

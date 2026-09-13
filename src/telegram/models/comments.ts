@@ -94,6 +94,7 @@ export async function insertFromMessages(
     where c.post_id = ${postId}
       and p.post_id = ${postId}
       and c.reply_to is null
+      -- the early return above for an empty messages array guards this against rendering "in ()"
       and c.telegram_message_id in ${ids}
       and p.telegram_message_id = c.reply_to_message_id
   `);

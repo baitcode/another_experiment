@@ -68,6 +68,21 @@ export class Upstream extends TelegramError {
   }
 }
 
-export function isTelegramError(e: unknown): e is TelegramError {
+/**
+ * `isTelegramError` narrows to the abstract `TelegramError` base type, which erases each
+ * subclass's own fields (e.g. `FloodWait.retryAfter`). This is the union of its only
+ * subclasses, so switching on `.kind` narrows `e` to the right one in each case.
+ */
+export type AnyTelegramError =
+  | UserNotFound
+  | PeerNotFound
+  | NoDiscussionGroup
+  | MessageNotFound
+  | Forbidden
+  | FloodWait
+  | SessionInvalid
+  | Upstream;
+
+export function isTelegramError(e: unknown): e is AnyTelegramError {
   return e instanceof TelegramError;
 }
