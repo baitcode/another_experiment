@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noFallthroughCasesInSwitch": true,
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "types": ["@types/deno"],
+    "paths": {
+      "@hono/hono": ["./vendor/jsr.io/@hono/hono/4.13.7/src/index.ts"],
+      "@hono/hono/jwt": ["./vendor/jsr.io/@hono/hono/4.13.7/src/middleware/jwt/jwt.ts"],
+      "@hono/hono/http-exception": ["./vendor/jsr.io/@hono/hono/4.13.7/src/http-exception.ts"],
+      "@cliffy/command": ["./vendor/jsr.io/@cliffy/command/1.2.1/mod.ts"],
+      "@std/assert": ["./vendor/jsr.io/@std/assert/1.0.19/mod.ts"]
+    }
+  },
+  "include": ["src/**/*.ts", "*.ts"]
+}

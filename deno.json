@@ -1,0 +1,39 @@
+{
+  "nodeModulesDir": "auto",
+  "vendor": true,
+  "tasks": {
+    "serve": "deno run -A src/cli.ts serve",
+    "sync": "deno run -A src/cli.ts sync",
+    "migrate": "deno run -A src/cli.ts migrate",
+    "dev:serve": "deno run -A --watch src/cli.ts serve",
+    "dev:sync": "deno run -A --watch src/cli.ts sync",
+    "db:generate": "deno run -A npm:drizzle-kit generate",
+    "test": "deno test -A src/",
+    "lint": "deno run -A npm:eslint src/",
+    "check": "deno check src/ && deno task lint && deno fmt --check",
+    "hooks": "git config core.hooksPath .githooks"
+  },
+  "imports": {
+    "@hono/hono": "jsr:@hono/hono@4.13.7",
+    "@cliffy/command": "jsr:@cliffy/command@1.2.1",
+    "@std/assert": "jsr:@std/assert@1.0.19",
+    "zod": "npm:zod@4.6.2",
+    "drizzle-orm": "npm:drizzle-orm@0.45.2",
+    "drizzle-kit": "npm:drizzle-kit@0.31.10",
+    "postgres": "npm:postgres@3.4.9",
+    "eslint": "npm:eslint@10.10.0",
+    "typescript-eslint": "npm:typescript-eslint@8.70.0",
+    "@types/deno": "npm:@types/deno@2.7.0"
+  },
+  "fmt": {
+    "lineWidth": 100,
+    "indentWidth": 2,
+    "useTabs": false,
+    "singleQuote": false,
+    "semiColons": true,
+    "proseWrap": "preserve",
+    "include": ["src/", "*.ts", "*.md", "*.json"],
+    "exclude": ["drizzle/", "vendor/", "node_modules/"]
+  },
+  "exclude": ["vendor/", "node_modules/", "drizzle/"]
+}
