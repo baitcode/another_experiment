@@ -163,3 +163,26 @@ Deno.test("commit awaits an in-flight heartbeat before fencing, so it can't resu
     assertEquals(rows[0]?.locked_until, null, "no straggler heartbeat resurrected the lock");
   });
 });
+
+Deno.test("a runner whose commit fn throws still resolves a failure outcome via the fallback commit", async () => {
+  await withDb(async (db) => {
+    await ensureActiveJob(db, { postId, platform: "telegram" });
+    const [job] = await pickJobs(db, { batchSize: 1, leaseMs: 60_000 });
+    assert(job !== undefined);
+    const runner: PlatformSyncRunner = {
+      platform: "telegram",
+      run: (_job, lease) =>
+        lease.commit(() => {
+          throw new Error("boom inside fn");
+        }),
+    };
+    const outcome = await runJob(deps(db), runner, job, 60_000);
+    assertEquals(outcome, { status: "failure", error: "boom inside fn", disable: false });
+    const runs = await listRunsForPost(db, postId);
+    assertEquals(runs.length, 1, "the failed attempt's rollback did not leave the run row open");
+    assertEquals(runs[0]?.status, "failure");
+    assertEquals(runs[0]?.error, "boom inside fn");
+    const again = await pickJobs(db, { batchSize: 1, leaseMs: 60_000 });
+    assertEquals(again.length, 1, "lease was released by the fallback commit");
+  });
+});

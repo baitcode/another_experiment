@@ -23,7 +23,7 @@ export async function runJob(
   const state = {
     lost: false,
     committed: false,
-    commitStarted: false,
+    commitInFlight: false,
     heartbeat: null as Promise<void> | null,
   };
   const beat = setInterval(() => {
@@ -43,33 +43,42 @@ export async function runJob(
   const lease: Lease = {
     token: job.leaseToken,
     commit: async (fn) => {
-      if (state.commitStarted) {
+      // A commit already succeeded, or one is currently running: either way, a second call is
+      // a runner bug. A commit that *failed* (fn threw, or the fence found the lease lost)
+      // clears commitInFlight in the `finally` below without ever setting `committed`, so
+      // runJob's own single fallback commit (for a runner that threw without ever committing,
+      // or whose one attempt just failed) is still allowed through.
+      if (state.committed || state.commitInFlight) {
         throw new Error("lease.commit called twice");
       }
-      state.commitStarted = true;
-      // Stop the heartbeat and let any already in-flight one finish *before* we take the
-      // fenced row lock: otherwise a heartbeat UPDATE can sit blocked on that lock and fire
-      // right after we commit and release, resurrecting locked_until with the (still valid,
-      // unrotated) lease token.
-      clearInterval(beat);
-      if (state.heartbeat !== null) {
-        await state.heartbeat;
+      state.commitInFlight = true;
+      try {
+        // Stop the heartbeat and let any already in-flight one finish *before* we take the
+        // fenced row lock: otherwise a heartbeat UPDATE can sit blocked on that lock and fire
+        // right after we commit and release, resurrecting locked_until with the (still valid,
+        // unrotated) lease token.
+        clearInterval(beat);
+        if (state.heartbeat !== null) {
+          await state.heartbeat;
+        }
+        return await deps.db.transaction(async (tx) => {
+          const held = await fenceJob(tx, job.id, job.leaseToken);
+          if (!held) throw new LeaseLost();
+          const outcome = await fn(tx);
+          await closeRun(tx, runId, {
+            finishedAt: deps.now(),
+            status: outcome.status,
+            error: outcome.status === "failure" ? outcome.error : null,
+          });
+          await releaseJob(tx, job.id, job.leaseToken, {
+            disable: outcome.status === "failure" && outcome.disable,
+          });
+          state.committed = true;
+          return outcome;
+        });
+      } finally {
+        state.commitInFlight = false;
       }
-      return deps.db.transaction(async (tx) => {
-        const held = await fenceJob(tx, job.id, job.leaseToken);
-        if (!held) throw new LeaseLost();
-        const outcome = await fn(tx);
-        await closeRun(tx, runId, {
-          finishedAt: deps.now(),
-          status: outcome.status,
-          error: outcome.status === "failure" ? outcome.error : null,
-        });
-        await releaseJob(tx, job.id, job.leaseToken, {
-          disable: outcome.status === "failure" && outcome.disable,
-        });
-        state.committed = true;
-        return outcome;
-      });
     },
   };
 
