@@ -15,5 +15,46 @@ services:
       timeout: 3s
       retries: 30
 
+  migrate:
+    build: .
+    command: deno task migrate
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@db:5432/comments
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  http:
+    build: .
+    command: deno task dev:serve
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@db:5432/comments
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./src:/app/src
+      - ./deno.json:/app/deno.json
+      - ./deno.lock:/app/deno.lock
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  sync:
+    build: .
+    command: deno task dev:sync
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@db:5432/comments
+    volumes:
+      - ./src:/app/src
+      - ./deno.json:/app/deno.json
+      - ./deno.lock:/app/deno.lock
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
 volumes:
   dbdata:
