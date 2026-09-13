@@ -1,0 +1,1070 @@
+openapi: 3.1.0
+info:
+  title: Telegram comment service
+  version: 1.0.0
+  description: |
+    Stores Telegram posts submitted by a consumer, syncs their comment threads in the background,
+    lists comments and replies with cursor paging, and sends replies through the account that
+    submitted the post.
+
+    **Authentication.** Every route under `/telegram/v1` requires `Authorization: Bearer <jwt>`,
+    an HS256 token signed with the service's `JWT_SECRET`. Nothing checks that a caller owns the
+    data it touches; the consumer does. `/health` is open.
+
+    **Errors.** Every error body carries `status` (the HTTP status repeated), `code` (a stable
+    machine-readable string) and `message` (for humans, not stable). Some codes add fields, listed
+    on the responses below. A request to an unknown route gets `404` with code `not_found`;
+    an unexpected failure gets `500` with code `internal_error`.
+
+    **Ids.** Every id issued here is a UUIDv7. A path id that is not a UUID is reported as not
+    found (`404`), not as malformed.
+
+    **Deletion is soft.** Deleting a post stops its sync and keeps its comments; reads keep
+    returning the post and its comments with `deleted_at` set, while replying to a comment of a
+    deleted post is refused with `404`. Resubmitting a deleted post restores it.
+
+    **Paging.** Listings are load-more only: pass `next_cursor` from one page as `cursor` to get
+    the next. Cursors are opaque; build nothing from them.
+servers:
+  - url: http://localhost:8000
+    description: Local compose stack
+
+tags:
+  - name: Health
+    description: Liveness of the HTTP process. Says nothing about the database or the scheduler.
+  - name: Posts
+    description: Submitting a Telegram post for comment tracking, reading it and stopping it.
+  - name: Comments
+    description: Listing a post's comment thread and replying to a comment.
+
+security:
+  - bearerJwt: []
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: Liveness check
+      operationId: getHealth
+      security: []
+      responses:
+        "200":
+          description: The HTTP process is up.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+              example:
+                status: 200
+                ok: true
+
+  /telegram/v1/posts:
+    post:
+      tags: [Posts]
+      summary: Submit a post for comment retrieval
+      operationId: submitPost
+      description: |
+        Resolves the url against Telegram through the submitting account, stores the post and
+        creates or re-enables its sync job. The first sync run starts on the scheduler's next tick.
+
+        Submit checks only what it gets for free: a channel post's thread is resolved here, so a
+        channel without a discussion group or a message without a thread is refused with `400`.
+        A bad message id in a supergroup or forum passes submit and fails on the first sync run,
+        which shows up as `sync_error` on the post.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SubmitRequest"
+            example:
+              title: Launch announcement
+              username: demo
+              url: https://t.me/demo_channel/1
+      responses:
+        "201":
+          description: The post was not tracked for this username before and is now.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubmitResult"
+              example:
+                status: 201
+                id: 01a08dc6-ca2a-70e4-b3a4-f9c760f28b49
+                created_at: "2026-01-01T10:15:30.000Z"
+        "200":
+          description: |
+            The post was already tracked for this username. A deleted post is restored and a
+            disabled sync is re-enabled; `created_at` is the original submission time.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubmitResult"
+              example:
+                status: 200
+                id: 01a08dc6-ca2a-70e4-b3a4-f9c760f28b49
+                created_at: "2026-01-01T10:15:30.000Z"
+        "400":
+          description: |
+            The body or the url is unusable, or the url resolves to something without a comment
+            thread. Nothing is stored.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/MalformedBody"
+                  - $ref: "#/components/schemas/MalformedUrl"
+                  - $ref: "#/components/schemas/ChannelNotFound"
+                  - $ref: "#/components/schemas/NoDiscussionGroup"
+                  - $ref: "#/components/schemas/MessageNotFound"
+              examples:
+                malformed_body:
+                  summary: Body is not JSON or fails validation
+                  value:
+                    status: 400
+                    code: malformed_body
+                    message: "Too small: expected string to have >=1 characters at title"
+                malformed_url:
+                  summary: Url does not match a supported form
+                  value:
+                    status: 400
+                    code: malformed_url
+                    message: url does not match any supported form
+                channel_not_found:
+                  summary: Url does not resolve to a channel or group
+                  value:
+                    status: 400
+                    code: channel_not_found
+                    message: url does not resolve to a channel or group
+                no_discussion_group:
+                  summary: Channel has no discussion group
+                  value:
+                    status: 400
+                    code: no_discussion_group
+                    message: channel has no discussion group, so the post has no comment thread
+                message_not_found:
+                  summary: Message has no discussion thread
+                  value:
+                    status: 400
+                    code: message_not_found
+                    message: url does not point at a message with a discussion thread
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: The submitting account is unknown to the credentials service.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserNotFound"
+              example:
+                status: 404
+                code: user_not_found
+                message: user demo not found
+        "500":
+          $ref: "#/components/responses/TelegramAccountFailure"
+        "502":
+          $ref: "#/components/responses/UpstreamFailure"
+
+  /telegram/v1/posts/{postId}:
+    parameters:
+      - $ref: "#/components/parameters/PostId"
+    get:
+      tags: [Posts]
+      summary: Get a post
+      operationId: getPost
+      description: Returns the post with its sync state. A deleted post is returned with `deleted_at` set.
+      responses:
+        "200":
+          description: The post.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Post"
+              example:
+                status: 200
+                id: 01a08dc6-ca2a-70e4-b3a4-f9c760f28b49
+                username: demo
+                title: Launch announcement
+                url: https://t.me/demo_channel/1
+                comments_synced_at: "2026-01-01T10:20:00.000Z"
+                sync_error: null
+                comment_sync_enabled: true
+                created_at: "2026-01-01T10:15:30.000Z"
+                deleted_at: null
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/PostNotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    delete:
+      tags: [Posts]
+      summary: Delete a post
+      operationId: deletePost
+      description: |
+        Soft-deletes the post and disables its sync job. A run in flight finishes normally.
+        Comments are kept and reads keep serving the post. Repeating the call returns `200` with
+        the same `deleted_at`.
+      responses:
+        "200":
+          description: The post is deleted, or already was.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PostDeleted"
+              example:
+                status: 200
+                id: 01a08dc6-ca2a-70e4-b3a4-f9c760f28b49
+                deleted_at: "2026-01-02T08:00:00.000Z"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/PostNotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /telegram/v1/posts/{postId}/comments:
+    parameters:
+      - $ref: "#/components/parameters/PostId"
+    get:
+      tags: [Comments]
+      summary: List a post's top-level comments
+      operationId: listComments
+      description: |
+        Top-level comments of the post in id order, which is insertion order. Replies are not
+        included; each item says whether it has any, and they are listed per comment. A deleted
+        post still lists its comments.
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: One page of comments.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommentPage"
+              example:
+                status: 200
+                items:
+                  - id: 01a08dcf-9995-704a-ac33-2c6e6233dcb8
+                    telegram_message_id: 4000
+                    reply_to: null
+                    text: Great news, when does it ship?
+                    author_name: Alice
+                    author_username: alice
+                    author_id: "123456789"
+                    has_replies: true
+                    posted_at: "2026-01-01T10:16:00.000Z"
+                    edited_at: null
+                    deleted_at: null
+                next_cursor: eyJhZnRlciI6IjAxYTA4ZGNmLTk5OTUtNzA0YS1hYzMzLTJjNmU2MjMzZGNiOCJ9
+                has_more: true
+        "400":
+          $ref: "#/components/responses/MalformedPage"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/PostNotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /telegram/v1/posts/{postId}/comments/{commentId}/replies:
+    parameters:
+      - $ref: "#/components/parameters/PostId"
+      - $ref: "#/components/parameters/CommentId"
+    get:
+      tags: [Comments]
+      summary: List a comment's replies
+      operationId: listCommentReplies
+      description: Direct replies to the comment in id order. Replies to replies are listed under their own parent.
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: One page of replies.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommentPage"
+              example:
+                status: 200
+                items:
+                  - id: 01a08dd3-2b7e-7c11-9a5d-4e8f1c2b3a60
+                    telegram_message_id: 4821
+                    reply_to: 01a08dcf-9995-704a-ac33-2c6e6233dcb8
+                    text: Next week.
+                    author_name: Demo
+                    author_username: demo
+                    author_id: "987654321"
+                    has_replies: false
+                    posted_at: "2026-01-01T10:30:00.000Z"
+                    edited_at: null
+                    deleted_at: null
+                next_cursor: null
+                has_more: false
+        "400":
+          $ref: "#/components/responses/MalformedPage"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: The post or the comment does not exist, or the comment belongs to another post.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/PostNotFound"
+                  - $ref: "#/components/schemas/CommentNotFound"
+              examples:
+                post_not_found:
+                  value:
+                    status: 404
+                    code: post_not_found
+                    message: post 01a08dc6-ca2a-70e4-b3a4-f9c760f28b49 not found
+                comment_not_found:
+                  value:
+                    status: 404
+                    code: comment_not_found
+                    message: comment 01a08dcf-9995-704a-ac33-2c6e6233dcb8 not found
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /telegram/v1/posts/{postId}/comments/{commentId}/reply:
+    parameters:
+      - $ref: "#/components/parameters/PostId"
+      - $ref: "#/components/parameters/CommentId"
+    post:
+      tags: [Comments]
+      summary: Reply to a comment
+      operationId: replyToComment
+      description: |
+        Sends a reply to the comment as the account that submitted the post, then stores the reply
+        as an ordinary comment row with `reply_to` set. The account's own replies carry the post's
+        `username` as `author_username`.
+
+        Before sending, the target comment is re-read from Telegram. If it was deleted there, the
+        row is marked deleted and the reply is refused with `404`. If it was edited since it was
+        stored, the row is refreshed and the reply is refused with `409` carrying the current
+        comment; the same request goes through once resent.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReplyRequest"
+            example:
+              text: Next week.
+      responses:
+        "201":
+          description: The reply was sent and stored.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReplyCreated"
+              example:
+                status: 201
+                id: 01a08dd3-2b7e-7c11-9a5d-4e8f1c2b3a60
+                telegram_message_id: 4821
+                reply_to: 01a08dcf-9995-704a-ac33-2c6e6233dcb8
+                text: Next week.
+                author_name: Demo
+                author_username: demo
+                author_id: "987654321"
+                has_replies: false
+                posted_at: "2026-01-01T10:30:00.000Z"
+                edited_at: null
+                deleted_at: null
+        "400":
+          description: The body or the reply text is unusable. Nothing is sent.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/MalformedBody"
+                  - $ref: "#/components/schemas/MalformedMessage"
+                  - $ref: "#/components/schemas/MalformedMessageCharacter"
+              examples:
+                malformed_body:
+                  summary: Body is not JSON or has no string `text`
+                  value:
+                    status: 400
+                    code: malformed_body
+                    message: "Invalid input: expected string, received undefined at text"
+                malformed_message_empty:
+                  summary: Text is blank
+                  value:
+                    status: 400
+                    code: malformed_message
+                    message: reply text can not be empty
+                malformed_message_long:
+                  summary: Text exceeds 4096 code points
+                  value:
+                    status: 400
+                    code: malformed_message
+                    message: reply text is too long
+                malformed_message_character:
+                  summary: Text contains a control character or a lone surrogate
+                  value:
+                    status: 400
+                    code: malformed_message_character
+                    message: reply text contains invalid character at 20
+                    position: 20
+                    codepoint: U+0000
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: |
+            The post or the comment does not exist or is deleted, or the submitting account is
+            unknown to the credentials service. Nothing is sent.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/PostNotFound"
+                  - $ref: "#/components/schemas/CommentNotFound"
+                  - $ref: "#/components/schemas/UserNotFound"
+              examples:
+                post_not_found:
+                  value:
+                    status: 404
+                    code: post_not_found
+                    message: post 01a08dc6-ca2a-70e4-b3a4-f9c760f28b49 not found
+                post_deleted:
+                  value:
+                    status: 404
+                    code: post_not_found
+                    message: post 01a08dc6-ca2a-70e4-b3a4-f9c760f28b49 was deleted
+                comment_not_found:
+                  value:
+                    status: 404
+                    code: comment_not_found
+                    message: comment 01a08dcf-9995-704a-ac33-2c6e6233dcb8 not found
+                comment_deleted:
+                  summary: Deleted on Telegram, found on re-read or on send
+                  value:
+                    status: 404
+                    code: comment_not_found
+                    message: comment 01a08dcf-9995-704a-ac33-2c6e6233dcb8 was deleted
+                user_not_found:
+                  value:
+                    status: 404
+                    code: user_not_found
+                    message: user demo not found
+        "409":
+          description: |
+            The comment was edited on Telegram after it was stored. The row has been refreshed and
+            is returned as `comment`; resend the same request to reply to the current text.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommentEdited"
+              example:
+                status: 409
+                code: comment_edited
+                message: comment 01a08dcf-9995-704a-ac33-2c6e6233dcb8 was edited since it was stored
+                comment:
+                  id: 01a08dcf-9995-704a-ac33-2c6e6233dcb8
+                  telegram_message_id: 4000
+                  reply_to: null
+                  text: Great news, when does it ship? (edited)
+                  author_name: Alice
+                  author_username: alice
+                  author_id: "123456789"
+                  has_replies: true
+                  posted_at: "2026-01-01T10:16:00.000Z"
+                  edited_at: "2026-01-02T08:00:00.000Z"
+                  deleted_at: null
+        "500":
+          $ref: "#/components/responses/TelegramAccountFailure"
+        "502":
+          $ref: "#/components/responses/UpstreamFailure"
+
+components:
+  securitySchemes:
+    bearerJwt:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        HS256 token signed with the service's `JWT_SECRET`, with `sub`, `iat` and `exp` claims.
+        `signToken` in `src/api/auth.ts` issues one. Missing or invalid tokens get `401`.
+
+  parameters:
+    PostId:
+      name: postId
+      in: path
+      required: true
+      description: The post's id. A value that is not a UUID is reported as `404 post_not_found`.
+      schema:
+        type: string
+        format: uuid
+    CommentId:
+      name: commentId
+      in: path
+      required: true
+      description: The comment's id. A value that is not a UUID is reported as `404 comment_not_found`.
+      schema:
+        type: string
+        format: uuid
+    Limit:
+      name: limit
+      in: query
+      required: false
+      description: Page size.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      description: The `next_cursor` of the previous page. Omit for the first page.
+      schema:
+        type: string
+        minLength: 1
+
+  responses:
+    Unauthorized:
+      description: The bearer token is missing or does not verify.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Unauthorized"
+          examples:
+            missing:
+              value:
+                status: 401
+                code: unauthorized
+                message: missing bearer token
+            invalid:
+              value:
+                status: 401
+                code: unauthorized
+                message: invalid bearer token
+    PostNotFound:
+      description: No post has this id.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/PostNotFound"
+          example:
+            status: 404
+            code: post_not_found
+            message: post 01a08dc6-ca2a-70e4-b3a4-f9c760f28b49 not found
+    MalformedPage:
+      description: The paging query is unusable.
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: "#/components/schemas/MalformedQuery"
+              - $ref: "#/components/schemas/MalformedCursor"
+          examples:
+            malformed_query:
+              summary: "`limit` is not an integer between 1 and 100"
+              value:
+                status: 400
+                code: malformed_query
+                message: "Too big: expected number to be <=100"
+            malformed_cursor:
+              summary: "`cursor` is not one this service issued"
+              value:
+                status: 400
+                code: malformed_cursor
+                message: cursor is not a valid page cursor
+    InternalError:
+      description: An unexpected failure. The details are in the server log, not the response.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/InternalError"
+          example:
+            status: 500
+            code: internal_error
+            message: internal error
+    TelegramAccountFailure:
+      description: |
+        The account's Telegram session refused the call, or an unexpected failure occurred.
+        Retrying cannot help with `session_invalid` until the account is back in the credentials
+        service with a valid session; `flood_wait` says how long to wait.
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: "#/components/schemas/FloodWait"
+              - $ref: "#/components/schemas/SessionInvalid"
+              - $ref: "#/components/schemas/InternalError"
+          examples:
+            flood_wait:
+              value:
+                status: 500
+                code: flood_wait
+                message: telegram asks to wait 30 seconds
+                reason: FLOOD_WAIT_30
+                retry_after: 30
+            session_invalid:
+              value:
+                status: 500
+                code: session_invalid
+                message: telegram session for demo is not valid
+                reason: AUTH_KEY_UNREGISTERED
+            internal_error:
+              value:
+                status: 500
+                code: internal_error
+                message: internal error
+    UpstreamFailure:
+      description: Telegram refused the call or did not answer. `upstream_error` is the library's message.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/UpstreamFailure"
+          example:
+            status: 502
+            code: upstream_failure
+            message: tg api timeout
+            upstream_error: TIMEOUT
+
+  schemas:
+    Health:
+      type: object
+      required: [status, ok]
+      properties:
+        status:
+          type: integer
+          const: 200
+        ok:
+          type: boolean
+          const: true
+
+    SubmitRequest:
+      type: object
+      required: [title, username, url]
+      properties:
+        title:
+          type: string
+          minLength: 1
+          description: A label for the consumer's own use; the service does not read it.
+        username:
+          type: string
+          minLength: 1
+          description: |
+            The Telegram account that follows the post and will send replies. Its session lives
+            in the credentials service; this service never sees credentials.
+        url:
+          type: string
+          minLength: 1
+          description: |
+            A link to the post in one of these forms, with or without `https://`:
+
+            - `t.me/<username>/<id>`
+            - `t.me/c/<channel_id>/<id>`
+            - `t.me/<username>/<topic_id>/<id>` (forum; `<id>` must equal `<topic_id>`)
+            - `t.me/c/<channel_id>/<topic_id>/<id>` (forum, same rule)
+            - `tg://resolve?domain=<username>&post=<id>[&thread=<topic_id>]`
+            - `tg://privatepost?channel=<channel_id>&post=<id>[&thread=<topic_id>]`
+
+            `telegram.me` and a `www.` prefix are accepted. A `?comment=` link to a specific
+            comment is refused.
+
+    SubmitResult:
+      type: object
+      required: [status, id, created_at]
+      properties:
+        status:
+          type: integer
+          enum: [200, 201]
+          description: "`201` when the post is new for this username, `200` when it was already tracked."
+        id:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+          description: When the post was first submitted; unchanged by a resubmit.
+
+    Post:
+      type: object
+      required:
+        - status
+        - id
+        - username
+        - title
+        - url
+        - comments_synced_at
+        - sync_error
+        - comment_sync_enabled
+        - created_at
+        - deleted_at
+      properties:
+        status:
+          type: integer
+          const: 200
+        id:
+          type: string
+          format: uuid
+        username:
+          type: string
+          description: The account that submitted the post and sends its replies.
+        title:
+          type: string
+        url:
+          type: string
+          description: The url exactly as submitted.
+        comments_synced_at:
+          type: [string, "null"]
+          format: date-time
+          description: When the last successful sync run finished; `null` before the first one.
+        sync_error:
+          type: [string, "null"]
+          description: The last sync run's error, cleared by the next successful run.
+        comment_sync_enabled:
+          type: boolean
+          description: |
+            `false` once the post is deleted or the account became unusable (`session_invalid`
+            or `user_not_found`); resubmitting the post turns it back on.
+        created_at:
+          type: string
+          format: date-time
+        deleted_at:
+          type: [string, "null"]
+          format: date-time
+
+    PostDeleted:
+      type: object
+      required: [status, id, deleted_at]
+      properties:
+        status:
+          type: integer
+          const: 200
+        id:
+          type: string
+          format: uuid
+        deleted_at:
+          type: string
+          format: date-time
+          description: When the post was first deleted; unchanged by a repeat.
+
+    Comment:
+      type: object
+      description: |
+        A comment or a reply; both are the same row shape. The account's own replies, whether sent
+        through this API or from a Telegram client, appear here like any other comment.
+      required:
+        - id
+        - telegram_message_id
+        - reply_to
+        - text
+        - author_name
+        - author_username
+        - author_id
+        - has_replies
+        - posted_at
+        - edited_at
+        - deleted_at
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: UUIDv7; listings are ordered by it.
+        telegram_message_id:
+          type: integer
+          format: int64
+          description: The message id inside the discussion chat.
+        reply_to:
+          type: [string, "null"]
+          format: uuid
+          description: |
+            The parent comment's id. `null` for a top-level comment, and for a reply whose parent
+            was deleted on Telegram before it was ever synced.
+        text:
+          type: string
+        author_name:
+          type: [string, "null"]
+        author_username:
+          type: [string, "null"]
+        author_id:
+          type: [string, "null"]
+          description: The Telegram user id as a decimal string, since it exceeds 32 bits.
+        has_replies:
+          type: boolean
+        posted_at:
+          type: string
+          format: date-time
+        edited_at:
+          type: [string, "null"]
+          format: date-time
+          description: |
+            When Telegram says the message was last edited. Edits are not tracked by the sync; the
+            value is refreshed only when a reply attempt re-reads the comment.
+        deleted_at:
+          type: [string, "null"]
+          format: date-time
+          description: Set when a reply attempt found the comment deleted on Telegram.
+
+    CommentPage:
+      type: object
+      required: [status, items, next_cursor, has_more]
+      properties:
+        status:
+          type: integer
+          const: 200
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Comment"
+        next_cursor:
+          type: [string, "null"]
+          description: Pass as `cursor` to get the next page. `null` on the last page.
+        has_more:
+          type: boolean
+
+    ReplyRequest:
+      type: object
+      required: [text]
+      properties:
+        text:
+          type: string
+          description: |
+            Plain text, at most 4096 code points, not blank. Tab, line feed and carriage return
+            are allowed; other control characters and lone surrogates are refused.
+
+    ReplyCreated:
+      allOf:
+        - type: object
+          required: [status]
+          properties:
+            status:
+              type: integer
+              const: 201
+        - $ref: "#/components/schemas/Comment"
+
+    Error:
+      type: object
+      description: The shape every error shares. Specific codes may add fields.
+      required: [status, code, message]
+      properties:
+        status:
+          type: integer
+          description: The HTTP status, repeated.
+        code:
+          type: string
+          description: Stable, machine-readable.
+        message:
+          type: string
+          description: For humans; wording may change.
+
+    Unauthorized:
+      allOf:
+        - $ref: "#/components/schemas/Error"
+        - type: object
+          properties:
+            status:
+              const: 401
+            code:
+              const: unauthorized
+
+    MalformedBody:
+      description: The body is not JSON or fails validation; `message` names the first failing field.
+      allOf:
+        - $ref: "#/components/schemas/Error"
+        - type: object
+          properties:
+            status:
+              const: 400
+            code:
+              const: malformed_body
+
+    MalformedUrl:
+      description: |
+        `message` is one of `url does not match any supported form`, `forum link must point at the
+        topic root` or `links to a specific comment are not supported`.
+      allOf:
+        - $ref: "#/components/schemas/Error"
+        - type: object
+          properties:
+            status:
+              const: 400
+            code:
+              const: malformed_url
+
+    ChannelNotFound:
+      allOf:
+        - $ref: "#/components/schemas/Error"
+        - type: object
+          properties:
+            status:
+              const: 400
+            code:
+              const: channel_not_found
+
+    NoDiscussionGroup:
+      allOf:
+        - $ref: "#/components/schemas/Error"
+        - type: object
+          properties:
+            status:
+              const: 400
+            code:
+              const: no_discussion_group
+
+    MessageNotFound:
+      allOf:
+        - $ref: "#/components/schemas/Error"
+        - type: object
+          properties:
+            status:
+              const: 400
+            code:
+              const: message_not_found
+
+    MalformedQuery:
+      allOf:
+        - $ref: "#/components/schemas/Error"
+        - type: object
+          properties:
+            status:
+              const: 400
+            code:
+              const: malformed_query
+
+    MalformedCursor:
+      allOf:
+        - $ref: "#/components/schemas/Error"
+        - type: object
+          properties:
+            status:
+              const: 400
+            code:
+              const: malformed_cursor
+
+    MalformedMessage:
+      description: "`message` is `reply text can not be empty` or `reply text is too long`."
+      allOf:
+        - $ref: "#/components/schemas/Error"
+        - type: object
+          properties:
+            status:
+              const: 400
+            code:
+              const: malformed_message
+
+    MalformedMessageCharacter:
+      allOf:
+        - $ref: "#/components/schemas/Error"
+        - type: object
+          required: [position, codepoint]
+          properties:
+            status:
+              const: 400
+            code:
+              const: malformed_message_character
+            position:
+              type: integer
+              description: Zero-based index of the offending code point.
+            codepoint:
+              type: string
+              description: "`U+` followed by at least four uppercase hex digits."
+
+    PostNotFound:
+      description: "`message` ends in `not found`, or in `was deleted` when a write hit a deleted post."
+      allOf:
+        - $ref: "#/components/schemas/Error"
+        - type: object
+          properties:
+            status:
+              const: 404
+            code:
+              const: post_not_found
+
+    CommentNotFound:
+      description: "`message` ends in `not found`, or in `was deleted` when Telegram reported the comment gone."
+      allOf:
+        - $ref: "#/components/schemas/Error"
+        - type: object
+          properties:
+            status:
+              const: 404
+            code:
+              const: comment_not_found
+
+    UserNotFound:
+      allOf:
+        - $ref: "#/components/schemas/Error"
+        - type: object
+          properties:
+            status:
+              const: 404
+            code:
+              const: user_not_found
+
+    CommentEdited:
+      allOf:
+        - $ref: "#/components/schemas/Error"
+        - type: object
+          required: [comment]
+          properties:
+            status:
+              const: 409
+            code:
+              const: comment_edited
+            comment:
+              $ref: "#/components/schemas/Comment"
+
+    FloodWait:
+      allOf:
+        - $ref: "#/components/schemas/Error"
+        - type: object
+          required: [reason, retry_after]
+          properties:
+            status:
+              const: 500
+            code:
+              const: flood_wait
+            reason:
+              type: string
+              description: The library's message.
+            retry_after:
+              type: integer
+              description: Seconds Telegram asks to wait.
+
+    SessionInvalid:
+      allOf:
+        - $ref: "#/components/schemas/Error"
+        - type: object
+          required: [reason]
+          properties:
+            status:
+              const: 500
+            code:
+              const: session_invalid
+            reason:
+              type: string
+              description: The library's message.
+
+    InternalError:
+      allOf:
+        - $ref: "#/components/schemas/Error"
+        - type: object
+          properties:
+            status:
+              const: 500
+            code:
+              const: internal_error
+
+    UpstreamFailure:
+      allOf:
+        - $ref: "#/components/schemas/Error"
+        - type: object
+          required: [upstream_error]
+          properties:
+            status:
+              const: 502
+            code:
+              const: upstream_failure
+            upstream_error:
+              type: string
+              description: The library's message.

@@ -71,12 +71,39 @@ curl -s "localhost:8000/telegram/v1/posts/<id>/comments" -H "Authorization: Bear
 
 ## CLI
 
-- `serve [--with-sync]` - run the HTTP API; `--with-sync` also runs the scheduler in this process.
+- `serve` - run the HTTP API; 
 - `sync` - run the comment sync scheduler alone.
 - `migrate` - apply pending database migrations.
 
 Deploy as `serve --with-sync`: the Telegram library serialises calls per account on one
 connection, so every caller of one account must share a process.
+
+## Source layout
+
+`src/` is split into platform-agnostic infrastructure and one folder per platform. Each folder
+owns its own `tests/`; there are no cross-platform models.
+
+- **`cli.ts`** - Cliffy entry point for the commands above, and the only place a platform is
+  wired in: it builds the `Infra` object, mounts the platform's HTTP app and registers its sync
+  runner.
+- **`config.ts`** - reads and validates the environment variables below into a typed `Config`.
+- **`deps.ts`** - the `Infra` interface (`db`, `telegram` client provider, `now`) that every
+  handler, model and runner receives instead of importing globals.
+- **`db/`** - the drizzle client and transaction helper, migrations, and `schema.ts`, which only
+  re-exports every `models/schema.ts` so drizzle-kit sees one schema.
+- **`api/`** - platform-agnostic HTTP: the Hono root with bearer-JWT auth and the error handler,
+  plus the cursor and pagination helpers platform handlers share.
+- **`sync/`** - the platform-agnostic scheduler: job and run tables, the tick loop with lease and
+  concurrency limits, and `wrapRunner`, which commits a platform runner's write inside one fenced
+  transaction.
+- **`telegram/`** - the Telegram platform, and the template a new platform would copy:
+  `models/` (posts, comments, their schema), `api/` (the mounted Hono app and its handlers),
+  `client/` (the external library's interface, its errors and the in-memory fake) and `sync.ts`,
+  the `PlatformSyncRunner` that fetches one page of comments per run.
+- **`tests/`** - tests for the top-level files, currently `config.ts`.
+
+The full file-by-file listing is under "Layout" in
+[process/constitution.md](process/constitution.md).
 
 ## Environment variables
 
