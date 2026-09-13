@@ -90,6 +90,7 @@ connection, so every caller of one account must share a process.
 
 ## Verification status
 
-Unit and integration tests and a host-run `serve --with-sync` smoke test passed. The compose
-stack (`docker compose up`) has not yet been run because Docker was unavailable on the build
-machine.
+Unit and integration tests pass against PostgreSQL 18, and the compose stack has been exercised
+end to end: `docker compose up` migrates, `http` answers on port 8000, a submitted demo post is
+synced by the `sync` container within a few seconds, and listing, replying and resubmitting behave
+as the spec describes.
