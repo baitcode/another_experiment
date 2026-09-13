@@ -1,5 +1,5 @@
 import { assertEquals } from "@std/assert";
-import type { Deps } from "../../deps.ts";
+import type { Infra } from "../../deps.ts";
 import type { Db } from "../../db/client.ts";
 import { withDb } from "../../db/tests/helpers.ts";
 import { ensureActiveJob } from "../models/jobs.ts";
@@ -9,7 +9,7 @@ import { createScheduler } from "../scheduler.ts";
 
 const p = (n: number): string => `0199a000-0000-7000-8000-00000000000${String(n)}`;
 
-function deps(db: Db): Deps {
+function deps(db: Db): Infra {
   return {
     db,
     telegram: () => Promise.reject(new Error("no telegram in these tests")),
@@ -21,18 +21,16 @@ Deno.test("tick runs every picked job through its platform runner", async () => 
   await withDb(async (db) => {
     for (const n of [1, 2, 3]) await ensureActiveJob(db, { postId: p(n), platform: "telegram" });
     const seen: string[] = [];
-    const runner: PlatformSyncRunner = {
-      platform: "telegram",
-      run: (job, lease) => {
-        seen.push(job.postId);
-        return lease.commit(() => Promise.resolve({ status: "success" }));
-      },
+    const runner: PlatformSyncRunner = (_infra, job) => {
+      seen.push(job.postId);
+      return Promise.resolve(() => Promise.resolve({ status: "success" }));
     };
-    const s = createScheduler(deps(db), [runner], {
+    const s = createScheduler(deps(db), new Map([["telegram", runner]]), {
       tickMs: 10_000,
       batchSize: 2,
       leaseMs: 60_000,
       concurrency: 5,
+      pageSize: 100,
     });
     await s.tick();
     await s.stop();
@@ -52,21 +50,19 @@ Deno.test("concurrency cap limits in-flight runs", async () => {
     for (const n of [1, 2, 3]) await ensureActiveJob(db, { postId: p(n), platform: "telegram" });
     let inFlight = 0;
     let peak = 0;
-    const runner: PlatformSyncRunner = {
-      platform: "telegram",
-      run: async (_job, lease) => {
-        inFlight++;
-        peak = Math.max(peak, inFlight);
-        await new Promise((r) => setTimeout(r, 50));
-        inFlight--;
-        return lease.commit(() => Promise.resolve({ status: "success" }));
-      },
+    const runner: PlatformSyncRunner = async () => {
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      await new Promise((r) => setTimeout(r, 50));
+      inFlight--;
+      return () => Promise.resolve({ status: "success" });
     };
-    const s = createScheduler(deps(db), [runner], {
+    const s = createScheduler(deps(db), new Map([["telegram", runner]]), {
       tickMs: 10,
       batchSize: 10,
       leaseMs: 60_000,
       concurrency: 1,
+      pageSize: 100,
     });
     s.start();
     await new Promise((r) => setTimeout(r, 400));
@@ -81,21 +77,19 @@ Deno.test("tick() is reentrant-safe: overlapping calls don't exceed the concurre
     for (const n of [1, 2, 3]) await ensureActiveJob(db, { postId: p(n), platform: "telegram" });
     let inFlight = 0;
     let peak = 0;
-    const runner: PlatformSyncRunner = {
-      platform: "telegram",
-      run: async (_job, lease) => {
-        inFlight++;
-        peak = Math.max(peak, inFlight);
-        await new Promise((r) => setTimeout(r, 50));
-        inFlight--;
-        return lease.commit(() => Promise.resolve({ status: "success" }));
-      },
+    const runner: PlatformSyncRunner = async () => {
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      await new Promise((r) => setTimeout(r, 50));
+      inFlight--;
+      return () => Promise.resolve({ status: "success" });
     };
-    const s = createScheduler(deps(db), [runner], {
+    const s = createScheduler(deps(db), new Map([["telegram", runner]]), {
       tickMs: 10_000,
       batchSize: 10,
       leaseMs: 60_000,
       concurrency: 1,
+      pageSize: 100,
     });
     await Promise.all([s.tick(), s.tick()]);
     await s.stop();
@@ -107,18 +101,16 @@ Deno.test("stop() during a mid-flight tick prevents it from launching runs", asy
   await withDb(async (db) => {
     await ensureActiveJob(db, { postId: p(1), platform: "telegram" });
     let calls = 0;
-    const runner: PlatformSyncRunner = {
-      platform: "telegram",
-      run: (_job, lease) => {
-        calls++;
-        return lease.commit(() => Promise.resolve({ status: "success" }));
-      },
+    const runner: PlatformSyncRunner = () => {
+      calls++;
+      return Promise.resolve(() => Promise.resolve({ status: "success" }));
     };
-    const s = createScheduler(deps(db), [runner], {
+    const s = createScheduler(deps(db), new Map([["telegram", runner]]), {
       tickMs: 10_000,
       batchSize: 10,
       leaseMs: 60_000,
       concurrency: 5,
+      pageSize: 100,
     });
     const tickPromise = s.tick();
     await s.stop();
@@ -131,11 +123,12 @@ Deno.test("stop() during a mid-flight tick prevents it from launching runs", asy
 Deno.test("a job for a platform without a runner is failed and released", async () => {
   await withDb(async (db) => {
     await ensureActiveJob(db, { postId: p(1), platform: "telegram" });
-    const s = createScheduler(deps(db), [], {
+    const s = createScheduler(deps(db), new Map(), {
       tickMs: 10_000,
       batchSize: 10,
       leaseMs: 60_000,
       concurrency: 5,
+      pageSize: 100,
     });
     await s.tick();
     await s.stop();

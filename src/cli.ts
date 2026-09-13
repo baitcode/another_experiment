@@ -3,31 +3,31 @@ import { createApp } from "./api/app.ts";
 import { type Config, loadConfigFromEnv } from "./config.ts";
 import { createDb, type DbHandle } from "./db/client.ts";
 import { runMigrations } from "./db/migrate.ts";
-import type { Deps } from "./deps.ts";
+import type { Infra } from "./deps.ts";
 import { createScheduler, type Scheduler } from "./sync/scheduler.ts";
 import { createTelegramApi } from "./telegram/api/api.ts";
-import type { TelegramFactory } from "./telegram/client/client.ts";
+import type { TelegramClientProvider } from "./telegram/client/client.ts";
 import { FakeTelegram, seedDemo } from "./telegram/client/fake.ts";
-import { createTelegramSyncRunner } from "./telegram/sync.ts";
+import { telegramSyncRunner } from "./telegram/sync.ts";
 
 // `Config.telegramClient` is a single-member literal type ("fake") until a second binding
 // exists, so there is nothing to branch on yet.
-function telegramFactory(): TelegramFactory {
+function telegramFactory(): TelegramClientProvider {
   const fake = new FakeTelegram();
   seedDemo(fake);
   return (username) => fake.forUser(username);
 }
 
-function buildDeps(config: Config): { deps: Deps; handle: DbHandle } {
+function buildInfra(config: Config): { deps: Infra; handle: DbHandle } {
   const handle = createDb(config.databaseUrl);
-  const deps: Deps = { db: handle.db, telegram: telegramFactory(), now: () => new Date() };
+  const deps: Infra = { db: handle.db, telegram: telegramFactory(), now: () => new Date() };
   return { deps, handle };
 }
 
-function startScheduler(deps: Deps, config: Config): Scheduler {
+function startScheduler(deps: Infra, config: Config): Scheduler {
   const scheduler = createScheduler(
     deps,
-    [createTelegramSyncRunner(deps, { pageSize: config.sync.pageSize })],
+    new Map([["telegram", telegramSyncRunner]]),
     config.sync,
   );
   scheduler.start();
@@ -53,20 +53,17 @@ async function waitForSignal(): Promise<void> {
 
 const serve = new Command()
   .description("Run the HTTP API")
-  .option("--with-sync", "Also run the comment sync scheduler in this process")
-  .action(async ({ withSync }) => {
+  .action(async () => {
     const config = loadConfigFromEnv();
-    const { deps, handle } = buildDeps(config);
+    const { deps, handle } = buildInfra(config);
     const app = createApp({
       jwtSecret: config.jwtSecret,
       mounts: [{ path: "/telegram/v1", app: createTelegramApi(deps) }],
     });
     const server = Deno.serve({ port: config.port }, app.fetch);
     console.log(`http: listening on :${String(config.port)}`);
-    const scheduler = withSync === true ? startScheduler(deps, config) : null;
     await waitForSignal();
     await server.shutdown();
-    if (scheduler !== null) await scheduler.stop();
     await handle.close();
   });
 
@@ -74,7 +71,7 @@ const sync = new Command()
   .description("Run the comment sync scheduler alone")
   .action(async () => {
     const config = loadConfigFromEnv();
-    const { deps, handle } = buildDeps(config);
+    const { deps, handle } = buildInfra(config);
     const scheduler = startScheduler(deps, config);
     await waitForSignal();
     await scheduler.stop();

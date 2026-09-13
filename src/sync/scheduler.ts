@@ -1,6 +1,6 @@
-import type { Deps } from "../deps.ts";
+import type { Infra } from "../deps.ts";
 import { type PickedJob, pickJobs } from "./models/jobs.ts";
-import { runJob } from "./run.ts";
+import { wrapRunner } from "./run.ts";
 import type { PlatformSyncRunner } from "./runner.ts";
 import type { Platform } from "./models/schema.ts";
 
@@ -9,6 +9,7 @@ export interface SchedulerOptions {
   batchSize: number;
   leaseMs: number;
   concurrency: number;
+  pageSize: number;
 }
 
 export interface Scheduler {
@@ -18,11 +19,11 @@ export interface Scheduler {
 }
 
 export function createScheduler(
-  deps: Deps,
-  runners: PlatformSyncRunner[],
+  deps: Infra,
+  runners: ReadonlyMap<Platform, PlatformSyncRunner>,
   options: SchedulerOptions,
 ): Scheduler {
-  const byPlatform = new Map<Platform, PlatformSyncRunner>(runners.map((r) => [r.platform, r]));
+  const runOptions = { pageSize: options.pageSize };
   const inFlight = new Set<Promise<void>>();
   let timer: ReturnType<typeof setInterval> | null = null;
   let ticking = false;
@@ -34,22 +35,19 @@ export function createScheduler(
   let epoch = 0;
 
   function launch(job: PickedJob): void {
-    // A job whose platform has no registered runner still goes through the fenced `runJob`
+    // A job whose platform has no registered runner still goes through the wrapped, fenced
     // path (via an inline runner that immediately fails), so it's closed and released under
     // the same fence as any other run instead of three unfenced statements.
-    const fallback: PlatformSyncRunner = {
-      platform: job.platform,
-      run: (_job, lease) =>
-        lease.commit(() =>
-          Promise.resolve({
-            status: "failure",
-            error: `no runner for platform ${job.platform}`,
-            disable: false,
-          })
-        ),
-    };
-    const runner = byPlatform.get(job.platform) ?? fallback;
-    const work = runJob(deps, runner, job, options.leaseMs)
+    const fallback: PlatformSyncRunner = () =>
+      Promise.resolve(() =>
+        Promise.resolve({
+          status: "failure",
+          error: `no runner for platform ${job.platform}`,
+          disable: false,
+        })
+      );
+    const run = wrapRunner(deps, runners.get(job.platform) ?? fallback, runOptions);
+    const work = run(job)
       .then(() => undefined)
       .catch((e: unknown) => {
         console.error(`run for job ${job.id} crashed:`, e);

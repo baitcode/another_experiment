@@ -2,7 +2,7 @@ import { type Context, Hono } from "@hono/hono";
 import { z } from "zod";
 import { HttpError } from "../../api/errors.ts";
 import { type PageQuery, pageQuerySchema, toPageQuery } from "../../api/pagination.ts";
-import type { Deps } from "../../deps.ts";
+import type { Infra } from "../../deps.ts";
 import {
   listCommentReplies,
   listComments,
@@ -46,7 +46,7 @@ function parsePage(c: Context): PageQuery {
   return toPageQuery(parsed.data);
 }
 
-export function createTelegramApi(deps: Deps): Hono {
+export function createTelegramApi(deps: Infra): Hono {
   const app = new Hono();
 
   app.post("/posts", async (c) => {

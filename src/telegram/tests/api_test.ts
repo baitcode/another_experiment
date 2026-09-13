@@ -4,7 +4,7 @@ import { createApp } from "../../api/app.ts";
 import { signToken } from "../../api/auth.ts";
 import type { Db } from "../../db/client.ts";
 import { withDb } from "../../db/tests/helpers.ts";
-import type { Deps } from "../../deps.ts";
+import type { Infra } from "../../deps.ts";
 import { createTelegramApi } from "../api/api.ts";
 import { FakeTelegram } from "../client/fake.ts";
 import { insertFromMessages } from "../models/comments.ts";
@@ -26,7 +26,7 @@ async function world(
   fake.addPeer("mychannel", { chatId: 100, kind: "channel" });
   fake.linkDiscussion(100, 5, { chatId: CHAT, rootMessageId: ROOT });
   fake.addMessage(CHAT, ROOT, { id: 51, replyToMessageId: ROOT, text: "hi" });
-  const deps: Deps = { db, telegram: (u) => fake.forUser(u), now: () => new Date() };
+  const deps: Infra = { db, telegram: (u) => fake.forUser(u), now: () => new Date() };
   const app = createApp({
     jwtSecret: SECRET,
     mounts: [{ path: "/telegram/v1", app: createTelegramApi(deps) }],

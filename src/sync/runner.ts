@@ -1,6 +1,6 @@
 import type { Tx } from "../db/client.ts";
+import type { Infra } from "../deps.ts";
 import type { PickedJob } from "./models/jobs.ts";
-import type { Platform } from "./models/schema.ts";
 
 export type RunOutcome =
   | { status: "success" }
@@ -12,16 +12,19 @@ export class LeaseLost extends Error {
   }
 }
 
-export interface Lease {
-  readonly token: string;
-  /** The run's one fenced transaction: re-takes the job row, runs `fn`, closes the run row
-   *  and releases the lease, then commits. Rejects with LeaseLost (nothing written) when the
-   *  token no longer matches. A runner calls it exactly once, as its last act. */
-  commit(fn: (tx: Tx) => Promise<RunOutcome>): Promise<RunOutcome>;
+export interface RunOptions {
+  pageSize: number;
 }
 
-/** One per platform. Fetches one page for the job and writes it inside `lease.commit`. */
-export interface PlatformSyncRunner {
-  readonly platform: Platform;
-  run(job: PickedJob, lease: Lease): Promise<RunOutcome>;
-}
+/** What a run writes: executed by the sync domain inside the run's one fenced transaction,
+ *  after the job row has been re-taken under the lease token. */
+export type RunWrite = (tx: Tx) => Promise<RunOutcome>;
+
+/** One per platform, registered under its `Platform` key. Does the upstream work for one job
+ *  (one page) and hands back the write to make. It never sees the lease: fencing, closing the
+ *  run row and releasing are the sync domain's, see `wrapRunner`. */
+export type PlatformSyncRunner = (
+  infra: Infra,
+  job: PickedJob,
+  options: RunOptions,
+) => Promise<RunWrite>;

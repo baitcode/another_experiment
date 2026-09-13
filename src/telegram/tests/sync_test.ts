@@ -1,27 +1,27 @@
 import { assert, assertEquals } from "@std/assert";
 import type { Db } from "../../db/client.ts";
 import { withDb } from "../../db/tests/helpers.ts";
-import type { Deps } from "../../deps.ts";
+import type { Infra } from "../../deps.ts";
 import { getJobByPost, pickJobs } from "../../sync/models/jobs.ts";
 import { listRunsForPost } from "../../sync/models/runs.ts";
-import { runJob } from "../../sync/run.ts";
+import { wrapRunner } from "../../sync/run.ts";
 import { submitPost } from "../api/handlers/posts.ts";
 import { listComments } from "../api/handlers/comments.ts";
 import { FloodWait, SessionInvalid } from "../client/errors.ts";
 import { FakeTelegram } from "../client/fake.ts";
 import { getPost } from "../models/posts.ts";
-import { createTelegramSyncRunner } from "../sync.ts";
+import { telegramSyncRunner } from "../sync.ts";
 
 const CHAT = 200;
 const ROOT = 50;
 const page = { limit: 100, after: null };
 
-async function world(db: Db): Promise<{ deps: Deps; fake: FakeTelegram; postId: string }> {
+async function world(db: Db): Promise<{ deps: Infra; fake: FakeTelegram; postId: string }> {
   const fake = new FakeTelegram();
   fake.addAccount("alice", { id: 1, name: "Alice" });
   fake.addPeer("mychannel", { chatId: 100, kind: "channel" });
   fake.linkDiscussion(100, 5, { chatId: CHAT, rootMessageId: ROOT });
-  const deps: Deps = { db, telegram: (u) => fake.forUser(u), now: () => new Date() };
+  const deps: Infra = { db, telegram: (u) => fake.forUser(u), now: () => new Date() };
   const { id } = await submitPost(deps, {
     title: "p",
     username: "alice",
@@ -30,10 +30,10 @@ async function world(db: Db): Promise<{ deps: Deps; fake: FakeTelegram; postId: 
   return { deps, fake, postId: id };
 }
 
-async function runOnce(deps: Deps, pageSize = 100): Promise<void> {
+async function runOnce(deps: Infra, pageSize = 100): Promise<void> {
   const [job] = await pickJobs(deps.db, { batchSize: 1, leaseMs: 60_000 });
   assert(job !== undefined, "a job was due");
-  await runJob(deps, createTelegramSyncRunner(deps, { pageSize }), job, 60_000);
+  await wrapRunner(deps, telegramSyncRunner, { pageSize })(job);
 }
 
 Deno.test("a run ingests one page, moves the mark, records success", async () => {

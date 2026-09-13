@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { HttpError } from "../../../api/errors.ts";
-import type { Deps } from "../../../deps.ts";
+import type { Infra } from "../../../deps.ts";
 import { ensureActiveJob, getJobByPost, setJobActive } from "../../../sync/models/jobs.ts";
 import type { PeerKind } from "../../client/types.ts";
 import { getPost, type PostRow, softDeletePost, upsertPost } from "../../models/posts.ts";
@@ -137,7 +137,7 @@ interface ResolvedPeer {
   discussion: { chatId: number; rootMessageId: number } | null;
 }
 
-export async function submitPost(deps: Deps, body: SubmitBody): Promise<SubmitResult> {
+export async function submitPost(deps: Infra, body: SubmitBody): Promise<SubmitResult> {
   const parsed = parsePostUrl(body.url);
 
   const resolved = await (async (): Promise<ResolvedPeer> => {
@@ -201,7 +201,7 @@ export function serializePost(post: PostRow, job: { isActive: boolean } | null):
   };
 }
 
-export async function getPostView(deps: Deps, id: string): Promise<PostView> {
+export async function getPostView(deps: Infra, id: string): Promise<PostView> {
   const post = await getPost(deps.db, id);
   if (post === null) throw new HttpError(404, "post_not_found", `post ${id} not found`);
   const job = await getJobByPost(deps.db, { postId: id, platform: "telegram" });
@@ -209,7 +209,7 @@ export async function getPostView(deps: Deps, id: string): Promise<PostView> {
 }
 
 export async function deletePost(
-  deps: Deps,
+  deps: Infra,
   id: string,
 ): Promise<{ status: 200; id: string; deleted_at: string }> {
   const deleted = await deps.db.transaction(async (tx) => {

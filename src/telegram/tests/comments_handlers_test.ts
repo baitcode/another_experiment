@@ -2,7 +2,7 @@ import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
 import { HttpError } from "../../api/errors.ts";
 import type { Db } from "../../db/client.ts";
 import { withDb } from "../../db/tests/helpers.ts";
-import type { Deps } from "../../deps.ts";
+import type { Infra } from "../../deps.ts";
 import { Forbidden, PeerNotFound } from "../client/errors.ts";
 import { FakeTelegram } from "../client/fake.ts";
 import type { Message } from "../client/types.ts";
@@ -32,13 +32,13 @@ function msg(id: number, replyTo: number, text = `m${String(id)}`): Message {
   };
 }
 
-async function world(db: Db): Promise<{ deps: Deps; fake: FakeTelegram; postId: string }> {
+async function world(db: Db): Promise<{ deps: Infra; fake: FakeTelegram; postId: string }> {
   const fake = new FakeTelegram();
   fake.clock = () => new Date("2026-01-01T10:15:30Z");
   fake.addAccount("alice", { id: 1, name: "Alice" });
   fake.addPeer("mychannel", { chatId: 100, kind: "channel" });
   fake.linkDiscussion(100, 5, { chatId: CHAT, rootMessageId: ROOT });
-  const deps: Deps = {
+  const deps: Infra = {
     db,
     telegram: (u) => fake.forUser(u),
     now: () => new Date("2026-01-01T10:15:30Z"),

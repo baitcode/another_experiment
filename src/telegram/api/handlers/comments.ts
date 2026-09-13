@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { HttpError } from "../../../api/errors.ts";
 import { type PageQuery, type PageResult, toPage } from "../../../api/pagination.ts";
-import type { Deps } from "../../../deps.ts";
+import type { Infra } from "../../../deps.ts";
 import { isTelegramError } from "../../client/errors.ts";
 import type { Sent } from "../../client/types.ts";
 import {
@@ -77,13 +77,13 @@ export function serializeComment(c: CommentItem): CommentView {
   };
 }
 
-async function requirePost(deps: Deps, postId: string): Promise<PostRow> {
+async function requirePost(deps: Infra, postId: string): Promise<PostRow> {
   const post = await getPost(deps.db, postId);
   if (post === null) throw new HttpError(404, "post_not_found", `post ${postId} not found`);
   return post;
 }
 
-async function requireComment(deps: Deps, postId: string, commentId: string): Promise<CommentRow> {
+async function requireComment(deps: Infra, postId: string, commentId: string): Promise<CommentRow> {
   const comment = await getComment(deps.db, { id: commentId, postId });
   if (comment === null) {
     throw new HttpError(404, "comment_not_found", `comment ${commentId} not found`);
@@ -92,7 +92,7 @@ async function requireComment(deps: Deps, postId: string, commentId: string): Pr
 }
 
 export async function listComments(
-  deps: Deps,
+  deps: Infra,
   input: { postId: string; page: PageQuery },
 ): Promise<PageResult<CommentView>> {
   await requirePost(deps, input.postId);
@@ -102,7 +102,7 @@ export async function listComments(
 }
 
 export async function listCommentReplies(
-  deps: Deps,
+  deps: Infra,
   input: { postId: string; commentId: string; page: PageQuery },
 ): Promise<PageResult<CommentView>> {
   await requirePost(deps, input.postId);
@@ -121,7 +121,7 @@ function deletedComment(commentId: string): HttpError {
 }
 
 export async function replyToComment(
-  deps: Deps,
+  deps: Infra,
   input: { postId: string; commentId: string; text: string },
 ): Promise<CommentView> {
   // 1. validate before touching Telegram

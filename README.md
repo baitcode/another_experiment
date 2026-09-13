@@ -1,3 +1,19 @@
+# Foreword
+
+Thank you very much for the opportunity, it was a fun ride!
+
+This project is vibecoded heavily except for this section (well I've asked to read and fix language). Agent used Claude Max subscription Fable 5.1 model mostly using Max effort (Claude changes this setting for some reason to Extr High and I miss it always). I've used superpowers skill for brainstorming of initial project structure (`process/constitution.md`) and implementation of the project.
+
+I've failed to document the whole process properly (I should've commited more often), so had to ask AI to check logs and summarise what It's been asked to do. You can find that log in (`process/ai_log.md`).
+
+Whole thing started in the (`process/spec.md`) file, where I've outlined all of the initial assumptions about scoping and functional requirements of API and comment sync process, then I've defined the shape of API handlers. The important assumptions: I didn't want to pay too much attention to telegram client orchestraction and utilisation as it felt like a big task on it's own and focused on the API, data and scheduler implementation. I never checked if API's I've outlined for telegram client were ever possible to implement. Another assumption I've quickly decided on is not to try and build unified datamodel that would comfort all possible media platform as my experience tells that this task will most likely create a lot of problems for the future support, every new platform addition will affect all other platforms requiring for extensive testing, thoughful db schema migrations and lot's of genericly named entities without clear usage context. Scheduling, on the other side, seemed like something that might be unified, so I came up with a clear, rather simple solution for it. It has certain flaws, but without real data it's hard for me to optimise any further.
+
+Then I've created data model stubs using yaml and with the help of AI I've generated and cleaned up SQL representation (should've used Typescript there, but, well, it is what it is). While discovering the implementation details in a dialogue with AI notes started to pile up. At some point I started to feel that the amount of details covers whole service functionality I've planned for. I've ran several sessions of AI-peered review. Reviewed datamodel, reviewed API and reviewed overall spec for contradictions and gaps several times until reviews stopped producing comments that made sense to me. After that I decided to stop and regenerated the whole spec in a concise way eliminating repetition as much as I could focusing on readability. By the time I've finished the spec, I was already 16 hours in this project and felt an urge to wrap up. So I've create a constitution document outlining the stack and QA properties and desired file structure, then launched superpowers agentic development skill to vibecode the whole thing. I've spent several hours reviewing `sync` module, simplified the API's and dropped lease extension feature. I didn't review the models and their operations, those might contain minor problems, but I decided to skip dealing with those for now, as I don't really have more time to spend on the task.
+
+What I would do next:
+- Build a telegram client orchestration feature a special process holding telegram session on user behalf providing with API methods.
+- Test the whole thing manually
+
 # Telegram comment service
 
 Stores Telegram posts submitted by a consumer, syncs their comment threads with a leased
@@ -47,6 +63,11 @@ curl -s "localhost:8000/telegram/v1/posts/<id>/comments" -H "Authorization: Bear
   created on first run).
 - **Type check, lint and format check.** `deno task check`.
 - **Pre-commit hook.** `deno task hooks`.
+- **VS Code.** Install the Deno extension (`code --install-extension denoland.vscode-deno`) and
+  enable it for the workspace (`Deno: Enable` from the command palette, or `"deno.enable": true`
+  in `.vscode/settings.json`). Without it VS Code type-checks the project with its built-in
+  Node-style TypeScript server, which cannot resolve `jsr:` imports or `.ts` import paths and
+  reports errors that `deno check` does not.
 
 ## CLI
 
@@ -66,7 +87,7 @@ connection, so every caller of one account must share a process.
 | `JWT_SECRET`        | HS256 secret that signs and verifies service JWTs.                                                                                                                                   |
 | `SYNC_TICK_MS`      | Scheduler: how often to pick due jobs.                                                                                                                                               |
 | `SYNC_BATCH_SIZE`   | Scheduler: jobs picked per tick.                                                                                                                                                     |
-| `SYNC_LEASE_MS`     | Scheduler: lease length; a run heartbeats every half of it.                                                                                                                          |
+| `SYNC_LEASE_MS`     | Scheduler: lease length; size it for the slowest normal upstream call, a run never extends it.                                                                                       |
 | `SYNC_CONCURRENCY`  | Scheduler: runs in flight at once.                                                                                                                                                   |
 | `SYNC_PAGE_SIZE`    | Sync: messages fetched per run, at most 100.                                                                                                                                         |
 | `TELEGRAM_CLIENT`   | Telegram library binding. Only `fake` exists: an in-memory Telegram seeded with account `demo`.                                                                                      |

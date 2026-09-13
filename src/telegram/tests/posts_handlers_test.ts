@@ -2,14 +2,14 @@ import { assert, assertEquals, assertRejects } from "@std/assert";
 import { HttpError } from "../../api/errors.ts";
 import type { Db } from "../../db/client.ts";
 import { withDb } from "../../db/tests/helpers.ts";
-import type { Deps } from "../../deps.ts";
+import type { Infra } from "../../deps.ts";
 import { getJobByPost } from "../../sync/models/jobs.ts";
 import { FloodWait, SessionInvalid, Upstream } from "../client/errors.ts";
 import { FakeTelegram } from "../client/fake.ts";
 import { deletePost, getPostView, submitPost } from "../api/handlers/posts.ts";
 import { getPost, markSyncFailure } from "../models/posts.ts";
 
-function world(db: Db): { deps: Deps; fake: FakeTelegram } {
+function world(db: Db): { deps: Infra; fake: FakeTelegram } {
   const fake = new FakeTelegram();
   fake.addAccount("alice", { id: 1, name: "Alice" });
   fake.addPeer("mychannel", { chatId: 100, kind: "channel" });
@@ -18,7 +18,7 @@ function world(db: Db): { deps: Deps; fake: FakeTelegram } {
   fake.addPeer("lonely", { chatId: 300, kind: "channel" });
   fake.addPeer("mygroup", { chatId: 400, kind: "supergroup" });
   fake.addPeer("myforum", { chatId: 500, kind: "forum" });
-  const deps: Deps = {
+  const deps: Infra = {
     db,
     telegram: (u) => fake.forUser(u),
     now: () => new Date("2026-01-01T10:15:30Z"),

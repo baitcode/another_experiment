@@ -1,10 +1,10 @@
 # Assumptions
 
-These a Business logic related assumptions. For code conventions check constitution.md
+These are the business-logic assumptions. For code conventions, see constitution.md.
 
-**Scope.** One platform is worked through: Telegram. Platforms differ too much in how posts are addressed and how comments are fetched and answered to share endpoints, so each gets its own API namespace and version, here `/telegram/v1`. Out of scope: Telegram stories; post search, though it belongs near here; replies carrying anything but text, since media widens the research surface even if it is only a base64 field; and the 401, 403 and 429 responses.
+**Scope.** One platform is worked through: Telegram. Platforms differ too much in how posts are addressed and how comments are fetched and answered for them to share endpoints, so each gets its own API namespace and version, here `/telegram/v1`. Out of scope: Telegram stories; post search, though it belongs near here; replies carrying anything but text, since media widens the research surface even if it is only a base64 field; and the 401, 403 and 429 responses.
 
-**Access.** The API is internal: callers present a service-level JWT (debatable, could be simplified), and nothing checks that a caller owns the data it touches; the consumer does. Telegram credentials never reach this service. The service that authenticates users also keeps each account's MTProto session, and the [Telegram library](#telegram-library) is the only way this one uses it.
+**Access.** The API is internal: callers present a service-level JWT (debatable, could be simplified), and nothing checks that a caller owns the data it touches; the consumer does. Telegram credentials never reach this service. The service that authenticates users also keeps each account's MTProto session, and this service reaches it only through the [Telegram library](#telegram-library).
 
 **Ids.** Every id issued here is a UUIDv7 assigned by the database on insert, so one clock orders them, inserts append to the primary key index, and the listings can [page by id](#listing-comments). Pagination is load-more only: a cursor, no page numbers.
 
@@ -12,13 +12,13 @@ These a Business logic related assumptions. For code conventions check constitut
 
 **Edits and deletions made on Telegram are not tracked.** The sync only moves forward. A comment is re-read only when the account [replies](#replying) to it, and a reply to a comment deleted or edited since it was stored is refused after the row is refreshed. See also [Deliberately absent](#deliberately-absent).
 
-**The account's own replies are ordinary comments,** whether sent through this API or from a Telegram client: a `telegram_comments` row with `reply_to` pointing at the answered comment and the account's author fields. The sync skips a reply sent here because its (post_id, telegram_message_id) already exists. There is no own-comment flag; the consumer matches the post's `username` against `author_username`.
+**The account's own replies are ordinary comments,** whether sent through this API or from a Telegram client: a `telegram_comments` row with `reply_to` pointing at the answered comment and the account's author fields. The sync skips a reply sent through this API because its (post_id, telegram_message_id) pair already exists. There is no own-comment flag; the consumer matches the post's `username` against `author_username`.
 
 **A reply whose parent was deleted on Telegram before it was ever synced** keeps `reply_to` null and lists as a top-level comment. Accepted.
 
 **Submit checks only what it gets for free.** A channel post's thread is resolved at submit anyway, so a channel without a discussion group or a message without a thread is refused there with 400. A bad message id in a supergroup or forum passes submit and fails on the first sync run, see [Submitting a post](#submitting-a-post).
 
-**A job is disabled in two cases only:** the account became unusable (`SessionInvalid` or `UserNotFound`) or the post was deleted. A post's thread never moves, so any other failure is simply retried on the job's next turn, see [Syncing comments](#syncing-comments) and, for the missing backoff, [Open todo](#open-todo).
+**A job is disabled in two cases only:** the account became unusable (`SessionInvalid` or `UserNotFound`) or the post was deleted. A post's thread never moves, so any other failure is simply retried on the job's next turn; see [Syncing comments](#syncing-comments) and, for the missing backoff, [Open todo](#open-todo).
 
 # API
 
@@ -568,10 +568,10 @@ create table post_comments_sync_jobs (
     is_active               boolean not null default true,
 
     -- lease. locked_at is when the job was last picked and is never cleared: the scheduler orders by it, so
-    -- picking is round-robin with never-picked jobs first. locked_until is the lease expiry, set on pick, pushed
-    -- forward by the run while its upstream call is in flight, and cleared on release; a lease that expired
-    -- without release is stale and the job is eligible again. lease_token is issued fresh by every pick and
-    -- fences every write a run makes to this row and to the post, see Syncing comments
+    -- picking is round-robin with never-picked jobs first. locked_until is the lease expiry, set on pick and
+    -- cleared on release; a lease that expired without release is stale and the job is eligible again.
+    -- lease_token is issued fresh by every pick and fences every write a run makes to this row and to the
+    -- post, see Syncing comments
     locked_at               timestamptz,
     locked_until            timestamptz,
     lease_token             uuid
@@ -655,9 +655,9 @@ where j.id in (
 returning j.id, j.post_id, j.platform, j.lease_token;
 ```
 
-**Lease.** Each returned job starts a run as a background task: one upstream call and a short transaction, so `$lease_timeout` is sized for a normal call. While the call is in flight a heartbeat pushes `locked_until` forward by `$lease_timeout` whenever less than half of it is left, so a call queued behind others on the same account connection does not get the job picked twice.
+**Lease.** Each returned job starts a run as a background task: one upstream call and a short transaction. `$lease_timeout` is sized for the slowest call that should still count as normal, including one queued behind others on the same account connection. A run is not stopped when its lease expires; its commit is fenced, so if another run has taken the job meanwhile this one writes nothing.
 
-**Fence.** The pick issues a fresh `lease_token`, and every write a run makes to the job or the post carries `where lease_token = $token`: the heartbeat, and the first statement of each run transaction, which re-takes the job row `for update`. The token changes only when the job is picked again, so an expired lease nobody has taken yet still matches and the heartbeat revives it. Zero rows means another run holds the job: this one rolls back, closes its run row as `failure` with `lease lost`, and stops, having written nothing else; the new holder refetches the same page. A heartbeat refused the same way is early notice, and the run may stop waiting for its call.
+**Fence.** The pick issues a fresh `lease_token`, and every write a run makes to the job or the post carries `where lease_token = $token`, starting with the first statement of each run transaction, which re-takes the job row `for update`. The token changes only when the job is picked again, so an expired lease nobody has taken yet still matches and the run commits normally. Zero rows means another run holds the job: this one rolls back, closes its run row as `failure` with `lease lost`, and stops, having written nothing else; the new holder refetches the same page.
 
 **Run.**
 

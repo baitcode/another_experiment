@@ -21,4 +21,4 @@ export interface TelegramClient {
 }
 
 /** `for_user`: a handle for one account. Rejects with UserNotFound or Upstream. */
-export type TelegramFactory = (username: string) => Promise<TelegramClient>;
+export type TelegramClientProvider = (username: string) => Promise<TelegramClient>;

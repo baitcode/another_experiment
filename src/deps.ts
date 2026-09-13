@@ -1,8 +1,8 @@
 import type { Db } from "./db/client.ts";
-import type { TelegramFactory } from "./telegram/client/client.ts";
+import { TelegramClientProvider } from "./telegram/client/client.ts";
 
-export interface Deps {
+export interface Infra {
   db: Db;
-  telegram: TelegramFactory;
+  telegram: TelegramClientProvider;
   now: () => Date;
 }

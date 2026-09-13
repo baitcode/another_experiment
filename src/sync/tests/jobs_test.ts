@@ -5,7 +5,6 @@ import {
   ensureActiveJob,
   fenceJob,
   getJobByPost,
-  heartbeatJob,
   pickJobs,
   releaseJob,
   setJobActive,
@@ -60,13 +59,11 @@ Deno.test("pickJobs skips inactive jobs and re-takes expired leases", async () =
   });
 });
 
-Deno.test("heartbeat, fence and release honour the lease token", async () => {
+Deno.test("fence and release honour the lease token", async () => {
   await withDb(async (db) => {
     await ensureActiveJob(db, { postId: p(1), platform: "telegram" });
     const [job] = await pickJobs(db, { batchSize: 1, leaseMs: 60_000 });
     assert(job !== undefined);
-    assertEquals(await heartbeatJob(db, job.id, job.leaseToken, 60_000), true);
-    assertEquals(await heartbeatJob(db, job.id, p(9), 60_000), false);
     await db.transaction(async (tx) => {
       assertEquals(await fenceJob(tx, job.id, job.leaseToken), true);
       assertEquals(await fenceJob(tx, job.id, p(9)), false);

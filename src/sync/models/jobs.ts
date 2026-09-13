@@ -87,22 +87,6 @@ export async function pickJobs(
   }));
 }
 
-export async function heartbeatJob(
-  ex: Executor,
-  jobId: string,
-  leaseToken: string,
-  leaseMs: number,
-): Promise<boolean> {
-  const rows = await ex
-    .update(postCommentsSyncJobs)
-    .set({ lockedUntil: sql`now() + make_interval(secs => ${leaseMs}::numeric / 1000.0)` })
-    .where(
-      and(eq(postCommentsSyncJobs.id, jobId), eq(postCommentsSyncJobs.leaseToken, leaseToken)),
-    )
-    .returning({ id: postCommentsSyncJobs.id });
-  return rows.length > 0;
-}
-
 /** First statement of every run transaction: re-take the job row under the token. */
 export async function fenceJob(tx: Tx, jobId: string, leaseToken: string): Promise<boolean> {
   const rows = await tx

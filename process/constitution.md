@@ -90,10 +90,10 @@ src/
   sync/                   platform-agnostic scheduler
     models/
       schema.ts           post_comments_sync_jobs, post_comments_sync_runs
-      jobs.ts             pick, fenced re-take, heartbeat, release, disable
+      jobs.ts             pick, fenced re-take, release, disable
       runs.ts             open, close
-    runner.ts             interface PlatformSyncRunner { platform; run(job, token) }
-    run.ts                open run -> runner.run -> close run, release lease
+    runner.ts             interface PlatformSyncRunner { platform; run(infra, job, options) -> write }
+    run.ts                wrapRunner: open run -> runner.run -> fenced commit of its write, close run, release
     scheduler.ts          tick loop, concurrency cap, runners keyed by platform
     tests/
 
@@ -127,7 +127,7 @@ src/
 
 **Errors are translated at the edge, once.** Library errors carry a `kind`. Each context that can meet one, submit, reply and sync, maps it in one exhaustive switch. No library error reaches `api/errors.ts` untranslated, and no code string-matches an error message.
 
-**The scheduler owns the lease; the platform owns the page.** `sync/` implements pick, heartbeat, fence and run rows and dispatches by the job's `platform` column. A platform runner fetches one page and writes it in one fenced transaction, nothing more.
+**The scheduler owns the lease; the platform owns the page.** `sync/` implements pick, fence and run rows and dispatches by the job's `platform` column. A platform runner fetches one page and hands back the write for it; it never sees the lease. `wrapRunner` in `sync/run.ts` commits that write in the one fenced transaction, closes the run row and releases.
 
 **Dependencies are explicit.** `Deps` is built in `cli.ts` and passed down. Tests pass the fake client and a real database.
 
