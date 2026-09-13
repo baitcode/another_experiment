@@ -42,6 +42,9 @@ export class MessageNotFound extends TelegramError {
 
 export class Forbidden extends TelegramError {
   readonly kind = "forbidden";
+  constructor(readonly reason: string) {
+    super(reason);
+  }
 }
 
 export class FloodWait extends TelegramError {
@@ -53,10 +56,16 @@ export class FloodWait extends TelegramError {
 
 export class SessionInvalid extends TelegramError {
   readonly kind = "session_invalid";
+  constructor(readonly reason: string) {
+    super(reason);
+  }
 }
 
 export class Upstream extends TelegramError {
   readonly kind = "upstream";
+  constructor(readonly reason: string) {
+    super(reason);
+  }
 }
 
 export function isTelegramError(e: unknown): e is TelegramError {
